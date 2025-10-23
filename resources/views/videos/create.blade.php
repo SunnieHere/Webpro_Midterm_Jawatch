@@ -156,6 +156,8 @@
         // Create AJAX request
         const xhr = new XMLHttpRequest();
 
+        xhr.timeout = 300000;
+
         // Track upload progress
         xhr.upload.addEventListener('progress', function(e) {
             if (e.lengthComputable) {
@@ -195,9 +197,13 @@
         xhr.addEventListener('error', function() {
             showError('Network error. Please check your connection.');
         });
-
+        
         xhr.addEventListener('abort', function() {
             showError('Upload cancelled.');
+        });
+
+        xhr.addEventListener('timeout', function() {
+            showError('Upload timed out. The file may be too large or the connection too slow.');
         });
 
         // Send request
