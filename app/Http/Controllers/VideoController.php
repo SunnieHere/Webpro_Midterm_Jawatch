@@ -1,0 +1,235 @@
+<?php
+
+namespace App\Http\Controllers;
+
+use App\Models\Video;
+use App\Models\Like;
+use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Facades\Auth;
+
+class VideoController extends Controller
+{
+    public function index()
+    {
+        $videos = Video::latest()->paginate(12);
+        return view('videos.index', compact('videos'));
+    }
+
+    public function create()
+    {
+        return view('videos.create');
+    }
+
+    public function store(Request $request)
+    {
+        $request->validate([
+            'title' => 'required|string|max:255',
+            'description' => 'nullable|string',
+            'video' => 'required|file|mimetypes:video/mp4,video/quicktime,video/x-msvideo,video/x-matroska|max:512000',
+            'thumbnail' => 'nullable|image|max:2048',
+        ]);
+
+        // Store video
+        $videoPath = $request->file('video')->store('videos', 'public');
+        
+        // Handle thumbnail
+        $thumbPath = null;
+        
+        if ($request->hasFile('thumbnail')) {
+            // User uploaded custom thumbnail
+            $thumbPath = $request->file('thumbnail')->store('thumbnails', 'public');
+        } else {
+            // Generate a default placeholder thumbnail with video title
+            $thumbPath = $this->generatePlaceholderThumbnail($request->title);
+        }
+
+        $video = Video::create([
+            'user_id' => Auth::id(),
+            'title' => $request->title,
+            'description' => $request->description,
+            'video_path' => $videoPath,
+            'thumbnail_path' => $thumbPath,
+        ]);
+        if ($request->ajax() || $request->wantsJson()) {
+        return response()->json([
+            'success' => true,
+            'message' => 'Video uploaded successfully!',
+            'redirect' => route('videos.show', $video)
+        ]);
+    }
+        return redirect()->route('videos.show', $video)->with('success', 'Video uploaded successfully!');
+    }
+
+    private function generatePlaceholderThumbnail($title)
+    {
+        try {
+            // Create image (1280x720 - standard HD aspect ratio)
+            $width = 1280;
+            $height = 720;
+            $image = imagecreatetruecolor($width, $height);
+
+            // Random gradient background colors
+            $colors = [
+                ['start' => [239, 68, 68], 'end' => [220, 38, 38]],   // Red
+                ['start' => [59, 130, 246], 'end' => [37, 99, 235]],  // Blue
+                ['start' => [16, 185, 129], 'end' => [5, 150, 105]],  // Green
+                ['start' => [249, 115, 22], 'end' => [234, 88, 12]],  // Orange
+                ['start' => [168, 85, 247], 'end' => [147, 51, 234]], // Purple
+            ];
+
+            $selectedColor = $colors[array_rand($colors)];
+
+            // Create gradient background
+            for ($i = 0; $i < $height; $i++) {
+                $ratio = $i / $height;
+                $r = $selectedColor['start'][0] + ($selectedColor['end'][0] - $selectedColor['start'][0]) * $ratio;
+                $g = $selectedColor['start'][1] + ($selectedColor['end'][1] - $selectedColor['start'][1]) * $ratio;
+                $b = $selectedColor['start'][2] + ($selectedColor['end'][2] - $selectedColor['start'][2]) * $ratio;
+                
+                $color = imagecolorallocate($image, $r, $g, $b);
+                imagefilledrectangle($image, 0, $i, $width, $i + 1, $color);
+            }
+
+            // Add white text
+            $white = imagecolorallocate($image, 255, 255, 255);
+            
+            // Wrap title text
+            $wrappedTitle = wordwrap($title, 30, "\n");
+            $lines = explode("\n", $wrappedTitle);
+            
+            // Use built-in font (works without TTF files)
+            $fontSize = 5; // GD built-in font size (1-5)
+            $lineHeight = 20;
+            $startY = ($height / 2) - (count($lines) * $lineHeight / 2);
+            
+            foreach ($lines as $index => $line) {
+                $textWidth = imagefontwidth($fontSize) * strlen($line);
+                $x = ($width - $textWidth) / 2;
+                $y = $startY + ($index * $lineHeight);
+                imagestring($image, $fontSize, $x, $y, $line, $white);
+            }
+
+            // Add play icon (triangle)
+            $playSize = 80;
+            $centerX = $width / 2;
+            $centerY = $height / 2 + 100;
+            
+            $triangle = [
+                $centerX - $playSize / 2, $centerY - $playSize / 2,
+                $centerX - $playSize / 2, $centerY + $playSize / 2,
+                $centerX + $playSize / 2, $centerY
+            ];
+            
+            imagefilledpolygon($image, $triangle, 3, $white);
+
+            // Save thumbnail
+            $thumbnailName = 'thumbnails/' . uniqid() . '.jpg';
+            $thumbnailFullPath = storage_path('app/public/' . $thumbnailName);
+            
+            // Ensure directory exists
+            $thumbnailDir = dirname($thumbnailFullPath);
+            if (!file_exists($thumbnailDir)) {
+                mkdir($thumbnailDir, 0755, true);
+            }
+
+            imagejpeg($image, $thumbnailFullPath, 90);
+            imagedestroy($image);
+
+            return $thumbnailName;
+        } catch (\Exception $e) {
+            \Log::error('Thumbnail generation failed: ' . $e->getMessage());
+            return null;
+        }
+    }
+
+    public function show(Video $video)
+    {
+        $relatedVideos = Video::where('id', '!=', $video->id)
+            ->latest()
+            ->take(6)
+            ->get();
+
+        return view('videos.show', compact('video', 'relatedVideos'));
+    }
+
+
+    public function edit(Video $video)
+    {
+        $this->authorize('update', $video);
+        return view('videos.edit', compact('video'));
+    }
+
+    public function update(Request $request, Video $video)
+    {
+        $this->authorize('update', $video);
+
+        $request->validate([
+            'title' => 'required|string|max:255',
+            'description' => 'nullable|string',
+            'thumbnail' => 'nullable|image|max:2048',
+        ]);
+
+        if ($request->hasFile('thumbnail')) {
+            // Delete old thumbnail if it was auto-generated
+            if ($video->thumbnail_path && Storage::disk('public')->exists($video->thumbnail_path)) {
+                Storage::disk('public')->delete($video->thumbnail_path);
+            }
+            $video->thumbnail_path = $request->file('thumbnail')->store('thumbnails', 'public');
+        }
+
+        $video->update($request->only('title', 'description'));
+        if ($request->hasFile('thumbnail')) {
+            $video->save();
+        }
+
+        return redirect()->route('videos.show', $video)->with('success', 'Video updated successfully!');
+    }
+
+    public function destroy(Video $video)
+    {
+        $this->authorize('delete', $video);
+
+        Storage::disk('public')->delete($video->video_path);
+        if ($video->thumbnail_path) {
+            Storage::disk('public')->delete($video->thumbnail_path);
+        }
+
+        $video->delete();
+
+        return redirect()->route('home')->with('success', 'Video deleted successfully!');
+    }
+
+    public function toggleLike(Request $request, Video $video)
+    {
+        $request->validate(['action' => 'required|in:like,dislike']);
+
+        $like = Like::firstOrNew([
+            'video_id' => $video->id,
+            'user_id' => $request->user()->id,
+        ]);
+
+        if ($like->exists && $like->liked === ($request->action === 'like')) {
+            $like->delete();
+        } else {
+            $like->liked = ($request->action === 'like');
+            $like->save();
+        }
+
+        return back();
+    }
+    public function search(Request $request)
+    {
+        $query = $request->input('query');
+
+        $videos = \App\Models\Video::where('title', 'like', "%{$query}%")
+                    ->orWhereHas('user', function ($q) use ($query) {
+                        $q->where('username', 'like', "%{$query}%");
+                    })
+                    ->latest()
+                    ->get();
+
+        return view('videos.index', compact('videos', 'query'));
+    }
+
+}
