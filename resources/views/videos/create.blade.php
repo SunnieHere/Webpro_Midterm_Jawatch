@@ -186,7 +186,6 @@
                     showError('Invalid server response');
                 }
             } else if (xhr.status === 422) {
-                // Validation errors
                 try {
                     const errors = JSON.parse(xhr.responseText);
                     showValidationErrors(errors.errors);
@@ -217,8 +216,8 @@
             showError('Upload cancelled.');
         });
 
-        // Send request
-        xhr.open('POST', '{{ route("videos.store") }}');
+        // Send request - USE RELATIVE URL TO AVOID MIXED CONTENT
+        xhr.open('POST', '/videos');
         xhr.send(formData);
     });
 
