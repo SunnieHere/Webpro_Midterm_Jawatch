@@ -24,15 +24,16 @@ class VideoController extends Controller
 
     public function store(Request $request)
     {
+        set_time_limit(900);
         $request->validate([
             'title' => 'required|string|max:255',
             'description' => 'nullable|string',
             'video' => 'required|file|mimetypes:video/mp4,video/quicktime,video/x-msvideo,video/x-matroska|max:512000',
             'thumbnail' => 'nullable|image|max:2048',
         ]);
-
+    
         // Upload video to Cloudinary
-        $uploadedVideo = Cloudinary::uploadVideo($request->file('video')->getRealPath(), [
+        $uploadedVideo = Cloudinary::uploadVideo($request->file('video')->openFile(), [
             'folder' => 'videos',
             'resource_type' => 'video'
         ]);
