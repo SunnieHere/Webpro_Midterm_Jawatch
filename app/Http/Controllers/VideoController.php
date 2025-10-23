@@ -24,57 +24,70 @@ class VideoController extends Controller
 
     public function store(Request $request)
     {
-        set_time_limit(900);
-        $request->validate([
-            'title' => 'required|string|max:255',
-            'description' => 'nullable|string',
-            'video' => 'required|file|mimetypes:video/mp4,video/quicktime,video/x-msvideo,video/x-matroska|max:512000',
-            'thumbnail' => 'nullable|image|max:2048',
-        ]);
-    
-        // Upload video to Cloudinary
-        $uploadedVideo = Cloudinary::uploadVideo($request->file('video')->openFile(), [
-            'folder' => 'videos',
-            'resource_type' => 'video'
-        ]);
-        $videoPath = $uploadedVideo->getSecurePath();
-
-        // Upload thumbnail to Cloudinary if user provided one
-        if ($request->hasFile('thumbnail')) {
-            $uploadedThumb = Cloudinary::upload($request->file('thumbnail')->getRealPath(), [
-                'folder' => 'thumbnails'
+        try {
+            $request->validate([
+                'title' => 'required|string|max:255',
+                'description' => 'nullable|string',
+                'video' => 'required|file|mimetypes:video/mp4,video/quicktime,video/x-msvideo,video/x-matroska|max:512000',
+                'thumbnail' => 'nullable|image|max:2048',
             ]);
-            $thumbPath = $uploadedThumb->getSecurePath();
-        } else {
-            // Generate placeholder and upload to Cloudinary
-            $localThumbPath = $this->generatePlaceholderThumbnail($request->title);
-            $uploadedThumb = Cloudinary::upload($localThumbPath, [
-                'folder' => 'thumbnails'
+
+            // Upload video to Cloudinary
+            $uploadedVideo = Cloudinary::uploadVideo($request->file('video')->getRealPath(), [
+                'folder' => 'videos',
+                'resource_type' => 'video'
             ]);
-            $thumbPath = $uploadedThumb->getSecurePath();
-            
-            // Delete local placeholder
-            @unlink($localThumbPath);
-        }
+            $videoPath = $uploadedVideo->getSecurePath();
 
-        $video = Video::create([
-            'user_id' => Auth::id(),
-            'title' => $request->title,
-            'description' => $request->description,
-            'video_path' => $videoPath,
-            'thumbnail_path' => $thumbPath,
-        ]);
+            // Upload thumbnail to Cloudinary if user provided one
+            if ($request->hasFile('thumbnail')) {
+                $uploadedThumb = Cloudinary::upload($request->file('thumbnail')->getRealPath(), [
+                    'folder' => 'thumbnails'
+                ]);
+                $thumbPath = $uploadedThumb->getSecurePath();
+            } else {
+                // Generate placeholder and upload to Cloudinary
+                $localThumbPath = $this->generatePlaceholderThumbnail($request->title);
+                if ($localThumbPath) {
+                    $uploadedThumb = Cloudinary::upload($localThumbPath, [
+                        'folder' => 'thumbnails'
+                    ]);
+                    $thumbPath = $uploadedThumb->getSecurePath();
+                    
+                    // Delete local placeholder
+                    @unlink($localThumbPath);
+                } else {
+                    $thumbPath = null;
+                }
+            }
 
-        // Check if AJAX request
-        if ($request->ajax() || $request->wantsJson()) {
+            $video = Video::create([
+                'user_id' => Auth::id(),
+                'title' => $request->title,
+                'description' => $request->description,
+                'video_path' => $videoPath,
+                'thumbnail_path' => $thumbPath,
+            ]);
+
+            // Always return JSON for AJAX requests
             return response()->json([
                 'success' => true,
                 'message' => 'Video uploaded successfully!',
                 'redirect' => route('videos.show', $video)
             ]);
-        }
 
-        return redirect()->route('videos.show', $video)->with('success', 'Video uploaded successfully!');
+        } catch (\Illuminate\Validation\ValidationException $e) {
+            return response()->json([
+                'success' => false,
+                'errors' => $e->errors()
+            ], 422);
+        } catch (\Exception $e) {
+            \Log::error('Video upload failed: ' . $e->getMessage());
+            return response()->json([
+                'success' => false,
+                'message' => 'Upload failed: ' . $e->getMessage()
+            ], 500);
+        }
     }
 
     private function generatePlaceholderThumbnail($title)
@@ -163,42 +176,54 @@ class VideoController extends Controller
 
     public function update(Request $request, Video $video)
     {
-        $this->authorize('update', $video);
+        try {
+            $this->authorize('update', $video);
 
-        $request->validate([
-            'title' => 'required|string|max:255',
-            'description' => 'nullable|string',
-            'thumbnail' => 'nullable|image|max:2048',
-        ]);
-
-        if ($request->hasFile('thumbnail')) {
-            // Upload new thumbnail to Cloudinary
-            $uploadedThumb = Cloudinary::upload($request->file('thumbnail')->getRealPath(), [
-                'folder' => 'thumbnails'
+            $request->validate([
+                'title' => 'required|string|max:255',
+                'description' => 'nullable|string',
+                'thumbnail' => 'nullable|image|max:2048',
             ]);
-            $video->thumbnail_path = $uploadedThumb->getSecurePath();
-        }
 
-        $video->update($request->only('title', 'description'));
-        if ($request->hasFile('thumbnail')) {
+            if ($request->hasFile('thumbnail')) {
+                // Upload new thumbnail to Cloudinary
+                $uploadedThumb = Cloudinary::upload($request->file('thumbnail')->getRealPath(), [
+                    'folder' => 'thumbnails'
+                ]);
+                $video->thumbnail_path = $uploadedThumb->getSecurePath();
+            }
+
+            $video->title = $request->title;
+            $video->description = $request->description;
             $video->save();
-        }
 
-        if ($request->ajax() || $request->wantsJson()) {
+            // Always return JSON for AJAX requests
             return response()->json([
                 'success' => true,
                 'message' => 'Video updated successfully!',
                 'redirect' => route('videos.show', $video)
             ]);
-        }
 
-        return redirect()->route('videos.show', $video)->with('success', 'Video updated successfully!');
+        } catch (\Illuminate\Validation\ValidationException $e) {
+            return response()->json([
+                'success' => false,
+                'errors' => $e->errors()
+            ], 422);
+        } catch (\Exception $e) {
+            \Log::error('Video update failed: ' . $e->getMessage());
+            return response()->json([
+                'success' => false,
+                'message' => 'Update failed: ' . $e->getMessage()
+            ], 500);
+        }
     }
 
     public function destroy(Video $video)
     {
         $this->authorize('delete', $video);
 
+        // Note: Cloudinary files don't need to be manually deleted
+        // They can be managed through Cloudinary dashboard
         
         $video->delete();
 
