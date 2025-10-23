@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Storage;
+use CloudinaryLabs\CloudinaryLaravel\Facades\Cloudinary;
 
 class ProfileController extends Controller
 {
@@ -29,12 +30,12 @@ class ProfileController extends Controller
         ]);
 
         if ($request->hasFile('profile_photo')) {
-            if ($user->profile_photo && Storage::disk('public')->exists($user->profile_photo)) {
-                Storage::disk('public')->delete($user->profile_photo);
-            }
+            $uploadedFileUrl = Cloudinary::upload(
+                $request->file('profile_photo')->getRealPath(),
+                ['folder' => 'profile_photos']
+            )->getSecurePath();
 
-            $path = $request->file('profile_photo')->store('profile_photos', 'public');
-            $user->profile_photo = $path;
+            $user->profile_photo = $uploadedFileUrl;
         }
 
         $user->username = $request->username;
