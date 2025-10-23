@@ -147,7 +147,7 @@
             }
         });
 
-        xhr.open('POST', '{{ route("videos.update", $video) }}');
+        xhr.open('POST', '/videos/{{ $video->id }}');
         xhr.send(formData);
     });
 
