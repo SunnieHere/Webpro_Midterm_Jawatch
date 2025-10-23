@@ -27,7 +27,7 @@
         @if($video->thumbnail_path)
         <div class="mb-4">
             <label class="block text-white font-semibold mb-2">Current Thumbnail</label>
-            <img src="{{ asset('storage/' . $video->thumbnail_path) }}" alt="Current thumbnail" class="w-64 h-36 object-cover rounded-lg border border-neutral-800" id="currentThumbnail">
+            <img src="{{ $video->thumbnail_path }}" alt="Current thumbnail" class="w-64 h-36 object-cover rounded-lg border border-neutral-800" id="currentThumbnail">
         </div>
         @endif
 
