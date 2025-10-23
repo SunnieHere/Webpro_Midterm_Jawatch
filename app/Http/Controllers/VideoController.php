@@ -7,6 +7,7 @@ use App\Models\Like;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Facades\Auth;
+use CloudinaryLabs\CloudinaryLaravel\Facades\Cloudinary;
 
 class VideoController extends Controller
 {
@@ -30,18 +31,29 @@ class VideoController extends Controller
             'thumbnail' => 'nullable|image|max:2048',
         ]);
 
-        // Store video
-        $videoPath = $request->file('video')->store('videos', 'public');
-        
-        // Handle thumbnail
-        $thumbPath = null;
-        
+        // Upload video to Cloudinary
+        $uploadedVideo = Cloudinary::uploadVideo($request->file('video')->getRealPath(), [
+            'folder' => 'videos',
+            'resource_type' => 'video'
+        ]);
+        $videoPath = $uploadedVideo->getSecurePath();
+
+        // Upload thumbnail to Cloudinary if user provided one
         if ($request->hasFile('thumbnail')) {
-            // User uploaded custom thumbnail
-            $thumbPath = $request->file('thumbnail')->store('thumbnails', 'public');
+            $uploadedThumb = Cloudinary::upload($request->file('thumbnail')->getRealPath(), [
+                'folder' => 'thumbnails'
+            ]);
+            $thumbPath = $uploadedThumb->getSecurePath();
         } else {
-            // Generate a default placeholder thumbnail with video title
-            $thumbPath = $this->generatePlaceholderThumbnail($request->title);
+            // Generate placeholder and upload to Cloudinary
+            $localThumbPath = $this->generatePlaceholderThumbnail($request->title);
+            $uploadedThumb = Cloudinary::upload($localThumbPath, [
+                'folder' => 'thumbnails'
+            ]);
+            $thumbPath = $uploadedThumb->getSecurePath();
+            
+            // Delete local placeholder
+            @unlink($localThumbPath);
         }
 
         $video = Video::create([
@@ -51,36 +63,36 @@ class VideoController extends Controller
             'video_path' => $videoPath,
             'thumbnail_path' => $thumbPath,
         ]);
+
+        // Check if AJAX request
         if ($request->ajax() || $request->wantsJson()) {
-        return response()->json([
-            'success' => true,
-            'message' => 'Video uploaded successfully!',
-            'redirect' => route('videos.show', $video)
-        ]);
-    }
+            return response()->json([
+                'success' => true,
+                'message' => 'Video uploaded successfully!',
+                'redirect' => route('videos.show', $video)
+            ]);
+        }
+
         return redirect()->route('videos.show', $video)->with('success', 'Video uploaded successfully!');
     }
 
     private function generatePlaceholderThumbnail($title)
     {
         try {
-            // Create image (1280x720 - standard HD aspect ratio)
             $width = 1280;
             $height = 720;
             $image = imagecreatetruecolor($width, $height);
 
-            // Random gradient background colors
             $colors = [
-                ['start' => [239, 68, 68], 'end' => [220, 38, 38]],   // Red
-                ['start' => [59, 130, 246], 'end' => [37, 99, 235]],  // Blue
-                ['start' => [16, 185, 129], 'end' => [5, 150, 105]],  // Green
-                ['start' => [249, 115, 22], 'end' => [234, 88, 12]],  // Orange
-                ['start' => [168, 85, 247], 'end' => [147, 51, 234]], // Purple
+                ['start' => [239, 68, 68], 'end' => [220, 38, 38]],
+                ['start' => [59, 130, 246], 'end' => [37, 99, 235]],
+                ['start' => [16, 185, 129], 'end' => [5, 150, 105]],
+                ['start' => [249, 115, 22], 'end' => [234, 88, 12]],
+                ['start' => [168, 85, 247], 'end' => [147, 51, 234]],
             ];
 
             $selectedColor = $colors[array_rand($colors)];
 
-            // Create gradient background
             for ($i = 0; $i < $height; $i++) {
                 $ratio = $i / $height;
                 $r = $selectedColor['start'][0] + ($selectedColor['end'][0] - $selectedColor['start'][0]) * $ratio;
@@ -91,15 +103,11 @@ class VideoController extends Controller
                 imagefilledrectangle($image, 0, $i, $width, $i + 1, $color);
             }
 
-            // Add white text
             $white = imagecolorallocate($image, 255, 255, 255);
-            
-            // Wrap title text
             $wrappedTitle = wordwrap($title, 30, "\n");
             $lines = explode("\n", $wrappedTitle);
             
-            // Use built-in font (works without TTF files)
-            $fontSize = 5; // GD built-in font size (1-5)
+            $fontSize = 5;
             $lineHeight = 20;
             $startY = ($height / 2) - (count($lines) * $lineHeight / 2);
             
@@ -110,7 +118,6 @@ class VideoController extends Controller
                 imagestring($image, $fontSize, $x, $y, $line, $white);
             }
 
-            // Add play icon (triangle)
             $playSize = 80;
             $centerX = $width / 2;
             $centerY = $height / 2 + 100;
@@ -123,20 +130,12 @@ class VideoController extends Controller
             
             imagefilledpolygon($image, $triangle, 3, $white);
 
-            // Save thumbnail
-            $thumbnailName = 'thumbnails/' . uniqid() . '.jpg';
-            $thumbnailFullPath = storage_path('app/public/' . $thumbnailName);
-            
-            // Ensure directory exists
-            $thumbnailDir = dirname($thumbnailFullPath);
-            if (!file_exists($thumbnailDir)) {
-                mkdir($thumbnailDir, 0755, true);
-            }
-
-            imagejpeg($image, $thumbnailFullPath, 90);
+            // Save to temp location
+            $tempPath = sys_get_temp_dir() . '/' . uniqid() . '.jpg';
+            imagejpeg($image, $tempPath, 90);
             imagedestroy($image);
 
-            return $thumbnailName;
+            return $tempPath;
         } catch (\Exception $e) {
             \Log::error('Thumbnail generation failed: ' . $e->getMessage());
             return null;
@@ -145,6 +144,8 @@ class VideoController extends Controller
 
     public function show(Video $video)
     {
+        $video->increment('views');
+        
         $relatedVideos = Video::where('id', '!=', $video->id)
             ->latest()
             ->take(6)
@@ -152,7 +153,6 @@ class VideoController extends Controller
 
         return view('videos.show', compact('video', 'relatedVideos'));
     }
-
 
     public function edit(Video $video)
     {
@@ -171,16 +171,24 @@ class VideoController extends Controller
         ]);
 
         if ($request->hasFile('thumbnail')) {
-            // Delete old thumbnail if it was auto-generated
-            if ($video->thumbnail_path && Storage::disk('public')->exists($video->thumbnail_path)) {
-                Storage::disk('public')->delete($video->thumbnail_path);
-            }
-            $video->thumbnail_path = $request->file('thumbnail')->store('thumbnails', 'public');
+            // Upload new thumbnail to Cloudinary
+            $uploadedThumb = Cloudinary::upload($request->file('thumbnail')->getRealPath(), [
+                'folder' => 'thumbnails'
+            ]);
+            $video->thumbnail_path = $uploadedThumb->getSecurePath();
         }
 
         $video->update($request->only('title', 'description'));
         if ($request->hasFile('thumbnail')) {
             $video->save();
+        }
+
+        if ($request->ajax() || $request->wantsJson()) {
+            return response()->json([
+                'success' => true,
+                'message' => 'Video updated successfully!',
+                'redirect' => route('videos.show', $video)
+            ]);
         }
 
         return redirect()->route('videos.show', $video)->with('success', 'Video updated successfully!');
@@ -190,11 +198,7 @@ class VideoController extends Controller
     {
         $this->authorize('delete', $video);
 
-        Storage::disk('public')->delete($video->video_path);
-        if ($video->thumbnail_path) {
-            Storage::disk('public')->delete($video->thumbnail_path);
-        }
-
+        
         $video->delete();
 
         return redirect()->route('home')->with('success', 'Video deleted successfully!');
@@ -218,11 +222,12 @@ class VideoController extends Controller
 
         return back();
     }
+
     public function search(Request $request)
     {
         $query = $request->input('query');
 
-        $videos = \App\Models\Video::where('title', 'like', "%{$query}%")
+        $videos = Video::where('title', 'like', "%{$query}%")
                     ->orWhereHas('user', function ($q) use ($query) {
                         $q->where('username', 'like', "%{$query}%");
                     })
@@ -231,5 +236,4 @@ class VideoController extends Controller
 
         return view('videos.index', compact('videos', 'query'));
     }
-
 }
