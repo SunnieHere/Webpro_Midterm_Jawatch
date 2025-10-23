@@ -288,5 +288,20 @@
             }
         }
     }
+
+    const formData = new FormData();
+formData.append('_token', '{{ csrf_token() }}');
+formData.append('title', document.getElementById('title').value);
+formData.append('description', document.getElementById('description').value);
+
+// CRITICAL CHECK: Ensure you're appending the file objects
+const videoFile = document.getElementById('video').files[0];
+if (videoFile) {
+    formData.append('video', videoFile);
+}
+
+const thumbnailFile = document.getElementById('thumbnail').files[0];
+if (thumbnailFile) {
+    formData.append('thumbnail', thumbnailFile);
 </script>
 @endsection
